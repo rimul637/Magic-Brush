@@ -42,7 +42,7 @@ The APK is written to `app/build/outputs/apk/release`. The AAB is written to `ap
 
 ## GitHub Actions
 
-The Android workflow checks lint, the merged manifest and every level on pushes and pull requests. Tag pushes and manually requested signing runs build and verify signed APK/AAB artifacts. Supply a repository Actions secret named `BRUSH_RELEASE_SIGNING` with compact JSON fields `storeB64` (the base64-encoded PKCS#12 file), `storePassword`, `keyPassword` and `alias`. Keep the private keystore and signing secret outside the repository. GitHub release downloads are published separately from the build job.
+The Android workflow checks lint, the merged manifest and every level on pushes and pull requests. Tag pushes and manually requested signing runs build and verify signed APK/AAB artifacts. Supply a repository Actions secret named `BRUSH_RELEASE_SIGNING` with compact JSON fields `storeB64` (the base64-encoded PKCS#12 file), `storePassword`, `keyPassword` and `alias`. Keep the private keystore and signing secret outside the repository. From the main branch, choose **Run workflow**, enter `refs/tags/v1.0.0` in `source_ref`, and select **sign** to rebuild the published tag with the current workflow. GitHub release downloads are published separately from the build job.
 
 ## Source layout
 

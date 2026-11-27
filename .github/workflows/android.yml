@@ -11,6 +11,10 @@ on:
         description: Build and upload signed artifacts
         type: boolean
         default: false
+      source_ref:
+        description: Source tag or commit to build (blank uses the selected workflow ref)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -21,13 +25,16 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Install API 36 and Android Build Tools
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
       - name: Lint and exercise the drawing physics
         run: ./gradlew --no-daemon lintRelease testReleaseUnitTest
       - name: Validate merged manifest
@@ -40,12 +47,16 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
       - name: Build and check both signed packages
         env:
           BRUSH_RELEASE_SIGNING: ${{ secrets.BRUSH_RELEASE_SIGNING }}
@@ -70,7 +81,7 @@ jobs:
           mkdir dist
           cp app/build/outputs/apk/release/app-release.apk dist/Magic-Brush.apk
           cp app/build/outputs/bundle/release/app-release.aab dist/Magic-Brush.aab
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs dist/Magic-Brush.apk
+          "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools/36.0.0/apksigner" verify --print-certs dist/Magic-Brush.apk
           jarsigner -verify dist/Magic-Brush.aab
           (cd dist && sha256sum Magic-Brush.apk Magic-Brush.aab > SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
