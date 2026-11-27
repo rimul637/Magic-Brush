@@ -31,17 +31,21 @@ class Drawing {
 
     fun add(x: Float, y: Float, allowance: Float) {
         if (!x.isFinite() || !y.isFinite() || preview.size >= 220) return
-        val next = Point(x.coerceIn(12f, 948f), y.coerceIn(28f, 395f))
+        val targetX = x.coerceIn(12f, 948f)
+        val targetY = y.coerceIn(28f, 395f)
         val last = preview.lastOrNull()
         if (last == null) {
-            preview.add(next)
+            preview.add(Point(targetX, targetY))
             return
         }
-        val distance = last.distance(next)
+        val dx = targetX - last.x
+        val dy = targetY - last.y
+        val distanceSquared = dx * dx + dy * dy
         val available = allowance - length
-        if (distance < 3f || available < 3f) return
+        if (distanceSquared < 4f || available <= .001f) return
+        val distance = kotlin.math.sqrt(distanceSquared)
         val fraction = (available / distance).coerceAtMost(1f)
-        preview.add(Point(last.x + (next.x - last.x) * fraction, last.y + (next.y - last.y) * fraction))
+        preview.add(Point(last.x + dx * fraction, last.y + dy * fraction))
         length += distance * fraction
     }
 
@@ -71,7 +75,7 @@ class Drawing {
     private fun simplify(start: Int, end: Int, result: MutableList<Point>) {
         val edge = Edge(preview[start], preview[end])
         var farthest = 0
-        var threshold = 5.76f
+        var threshold = 3.06f
         for (index in start + 1 until end) {
             val point = preview[index]
             val distance = edge.distanceSquared(point.x, point.y)

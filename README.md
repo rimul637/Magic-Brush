@@ -15,7 +15,8 @@ An offline Android drawing puzzle for ages and skill levels that enjoy creative 
 - Draw by dragging a finger or the primary mouse button. Lift to commit a stroke.
 - Use **Go** to start the explorer. You may still draw during the attempt. **Undo** restores the ink from the latest stroke.
 - Use **Tab / Shift+Tab** and **Enter** for menus. In a puzzle the arrows move the drawing cursor. Press **Space** to begin or finish the stroke, **G** to go, **P** or **Esc** to pause, **Z** to undo and **R** to restart.
-- The terrain uses the same coordinates in portrait, landscape and resizable windows. The HUD respects display cutouts.
+- Drag the route map to inspect an area, or use **Map / Zoom in** (keyboard **M**) to switch between the whole route and a closer view. The close view follows the explorer after **Go**. On a keyboard, Tab to the route map and use Left or Right to move it.
+- The terrain uses the same coordinates in portrait, landscape and resizable windows. The scenery fills the window and the HUD respects display cutouts.
 
 ## Build
 
@@ -42,7 +43,7 @@ The APK is written to `app/build/outputs/apk/release`. The AAB is written to `ap
 
 ## GitHub Actions
 
-The Android workflow checks lint, the merged manifest and every level on pushes and pull requests. Tag pushes and manually requested signing runs build and verify signed APK/AAB artifacts. Supply a repository Actions secret named `BRUSH_RELEASE_SIGNING` with compact JSON fields `storeB64` (the base64-encoded PKCS#12 file), `storePassword`, `keyPassword` and `alias`. Keep the private keystore and signing secret outside the repository. From the main branch, choose **Run workflow**, enter `refs/tags/v1.0.0` in `source_ref`, and select **sign** to rebuild the published tag with the current workflow. GitHub release downloads are published separately from the build job.
+The Android workflow checks lint, the merged manifest and every level on pushes and pull requests. Tag pushes and manually requested signing runs build and verify signed APK/AAB artifacts. Supply a repository Actions secret named `BRUSH_RELEASE_SIGNING` with compact JSON fields `storeB64` (the base64-encoded PKCS#12 file), `storePassword`, `keyPassword` and `alias`. Keep the private keystore and signing secret outside the repository. From the main branch, choose **Run workflow**, enter the release ref (for example, `refs/tags/v1.0.0-fullscreen`) in `source_ref`, and select **sign** to rebuild the published tag with the current workflow. GitHub release downloads are published separately from the build job.
 
 ## Source layout
 

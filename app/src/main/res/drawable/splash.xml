@@ -1,5 +1,5 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@android:color/black" />
+    <item android:drawable="@color/splash_night" />
     <item android:width="144dp" android:height="144dp" android:gravity="center"
         android:drawable="@drawable/magic_icon" />
 </layer-list>

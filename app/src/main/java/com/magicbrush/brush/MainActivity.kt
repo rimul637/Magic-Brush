@@ -1,6 +1,9 @@
 package com.magicbrush.brush
 
 import android.os.Bundle
+import android.os.Build
+import android.content.res.Configuration
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -43,9 +46,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -83,9 +90,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (Build.VERSION.SDK_INT >= 28) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= 30) {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                } else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
+        immerse()
+        window.decorView.post { if (!isFinishing) immerse() }
         sound = Audio(this)
         val progress = ProgressRepository(applicationContext)
-        setContent { MagicBrush(progress, sound, active, ::finish) }
+        setContent { MagicBrush(progress, sound, active, ::finish, ::immerse) }
     }
 
     override fun onResume() {
@@ -109,6 +126,11 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) immerse()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        immerse()
+    }
+
     private fun immerse() {
         WindowCompat.getInsetsController(window, window.decorView).apply {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -118,7 +140,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun MagicBrush(repository: ProgressRepository, audio: Audio, active: Boolean, exit: () -> Unit) {
+private fun MagicBrush(repository: ProgressRepository, audio: Audio, active: Boolean, exit: () -> Unit, refreshImmersion: () -> Unit) {
     val progress by repository.state.collectAsState(initial = Progress())
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -179,6 +201,12 @@ private fun MagicBrush(repository: ProgressRepository, audio: Audio, active: Boo
         audio.update(active, progress.music, progress.effects, screen == Screen.GAME)
         if (!active && screen == Screen.GAME && popup == null) popup = Popup.PAUSE
     }
+    LaunchedEffect(active, screen, popup, art != null) {
+        if (active) {
+            refreshImmersion()
+            withFrameNanos { refreshImmersion() }
+        }
+    }
     LaunchedEffect(active, selected, popup) {
         if (!active) return@LaunchedEffect
         var last = 0L
@@ -229,7 +257,12 @@ private fun MagicBrush(repository: ProgressRepository, audio: Audio, active: Boo
     Box(Modifier.fillMaxSize().background(Color(0xFF161436))) {
         val ready = art
         if (ready == null) {
-            Label("MAGIC BRUSH", Modifier.align(Alignment.Center), 32, Gold, FontWeight.Black)
+            Box(Modifier.fillMaxSize().background(Brush.radialGradient(
+                listOf(Color(0xFF653F89), Color(0xFF17122F))))) {
+                Image(painterResource(R.drawable.magic_icon), "Magic Brush",
+                    Modifier.align(Alignment.Center).widthIn(max = 156.dp).fillMaxWidth()
+                        .aspectRatio(1f).clip(RoundedCornerShape(24.dp)))
+            }
             return@Box
         }
         Background(ready, if (screen == Screen.MENU || screen == Screen.WORLDS) World.MAGIC else world,
@@ -361,25 +394,40 @@ private fun Menu(clock: FloatState, playAudio: (Cue) -> Unit, play: () -> Unit, 
 private fun Worlds(progress: Progress, back: () -> Unit, select: (World) -> Unit) {
     val worldArt = intArrayOf(R.drawable.world_forest, R.drawable.world_desert, R.drawable.world_ice,
         R.drawable.world_lava, R.drawable.world_sky, R.drawable.world_magic)
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Header("Choose a world", "${progress.total} / 180 stars", back)
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            for (world in World.entries) {
-                val count = progress.stars.drop(world.ordinal * 10).take(10).count { it > 0 }
-                val form = RoundedCornerShape(17.dp)
-                val source = remember { MutableInteractionSource() }
-                val focused by source.collectIsFocusedAsState()
-                Box(Modifier.fillMaxWidth().height(88.dp).clip(form)
-                    .border(if (focused) 3.dp else 1.dp, Color(world.accent), form)
-                    .clickable(interactionSource = source, indication = null, enabled = LocalControls.current, role = Role.Button) { select(world) }) {
-                    Image(painterResource(worldArt[world.ordinal]), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                    Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xF015102C), Color(0x2615102C)))))
-                    Column(Modifier.align(Alignment.CenterStart).padding(horizontal = 16.dp)) {
-                        Label(world.title, size = 23, color = Color(world.accent), weight = FontWeight.Black, serif = true)
-                        Label(world.detail, size = 13)
+    BoxWithConstraints(Modifier.fillMaxSize().padding(12.dp)) {
+        val columns = when {
+            maxWidth >= 750.dp -> 3
+            maxWidth >= 530.dp -> 2
+            else -> 1
+        }
+        val cardHeight = if (columns > 1) 118.dp else 88.dp
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Header("Choose a world", "${progress.total} / 180 stars", back)
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (group in World.entries.chunked(columns)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (world in group) {
+                            val count = progress.stars.drop(world.ordinal * 10).take(10).count { it > 0 }
+                            val form = RoundedCornerShape(17.dp)
+                            val source = remember { MutableInteractionSource() }
+                            val focused by source.collectIsFocusedAsState()
+                            Box(Modifier.weight(1f).height(cardHeight).clip(form)
+                                .border(if (focused) 3.dp else 1.dp, Color(world.accent), form)
+                                .clickable(interactionSource = source, indication = null, enabled = LocalControls.current,
+                                    role = Role.Button) { select(world) }) {
+                                Image(painterResource(worldArt[world.ordinal]), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x2515102C), Color(0xF015102C)))))
+                                Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
+                                    Label(world.title, size = 21, color = Color(world.accent), weight = FontWeight.Black,
+                                        serif = true, align = TextAlign.Start)
+                                    Label(world.detail, size = 12, align = TextAlign.Start)
+                                }
+                                Label("$count/10", Modifier.align(Alignment.TopEnd).padding(7.dp)
+                                    .background(Amethyst, RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp), 12, Cream, FontWeight.Bold)
+                            }
+                        }
                     }
-                    Label("$count/10", Modifier.align(Alignment.TopEnd).padding(9.dp).background(Amethyst, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 9.dp, vertical = 4.dp), 13, Cream, FontWeight.Bold)
                 }
             }
         }
@@ -427,6 +475,10 @@ private fun GameScreen(art: Art, game: Game, clock: FloatState, interpolation: F
                        pause: () -> Unit, restart: () -> Unit) {
     val focused = remember { FocusRequester() }
     val cursor = remember { Cursor() }
+    val camera = remember(game) {
+        BoardCamera(game.level.hints.firstOrNull()?.x
+            ?: game.level.switches.firstOrNull()?.x ?: game.level.hazards.firstOrNull()?.x ?: 255f)
+    }
     val currentUpdate by rememberUpdatedState(updateInk)
     val inkWidth by animateFloatAsState(ink, tween(155), label = "ink")
     LaunchedEffect(interactive) {
@@ -434,102 +486,191 @@ private fun GameScreen(art: Art, game: Game, clock: FloatState, interpolation: F
         else {
             cursor.drawing = false
             game.drawing.clear()
+            camera.frozenFocus = null
             currentUpdate()
         }
     }
-    Column(Modifier.fillMaxSize().focusRequester(focused).onPreviewKeyEvent { event ->
-        if (!interactive || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-        when (event.key) {
-            Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown -> {
-                cursor.visible = true
-                when (event.key) {
-                    Key.DirectionLeft -> cursor.x = (cursor.x - 7).coerceAtLeast(12f)
-                    Key.DirectionRight -> cursor.x = (cursor.x + 7).coerceAtMost(948f)
-                    Key.DirectionUp -> cursor.y = (cursor.y - 7).coerceAtLeast(28f)
-                    else -> cursor.y = (cursor.y + 7).coerceAtMost(395f)
-                }
-                if (cursor.drawing) game.draw(cursor.x, cursor.y)
-                currentUpdate()
-            }
-            Key.Spacebar -> if (cursor.visible) {
-                if (event.nativeKeyEvent.repeatCount > 0) return@onPreviewKeyEvent true
-                cursor.drawing = !cursor.drawing
-                if (cursor.drawing) game.draw(cursor.x, cursor.y) else game.finish()
-                currentUpdate()
-            } else return@onPreviewKeyEvent false
-            Key.G -> if (!playing) go()
-            Key.P, Key.Escape -> pause()
-            Key.Z -> undo()
-            Key.R -> restart()
-            else -> return@onPreviewKeyEvent false
-        }
-        true
-    }.focusable(enabled = interactive)) {
-        Row(Modifier.fillMaxWidth().padding(start = 13.dp, end = 13.dp, top = 11.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).background(Color(0xCB211633), RoundedCornerShape(15.dp)).padding(10.dp)) {
-                Label("LEVEL ${game.level.number}  ·  ${game.level.title}", size = 15, color = Gold,
-                    weight = FontWeight.Black, align = TextAlign.Start)
-                Spacer(Modifier.height(5.dp))
-                Label("INK  ${(ink * 100).toInt()}%", size = 10, color = Cream, weight = FontWeight.Bold,
-                    align = TextAlign.Start)
-                Spacer(Modifier.height(3.dp))
-                val shape = RoundedCornerShape(12.dp)
-                Box(Modifier.fillMaxWidth().height(9.dp).clip(shape).background(Color(0xFF100D22))
-                    .semantics { contentDescription = "Ink remaining, ${(ink * 100).toInt()} percent" }) {
-                    Box(Modifier.fillMaxHeight().fillMaxWidth(inkWidth.coerceIn(0f, 1f))
-                        .background(Brush.horizontalGradient(listOf(Color(0xFFC56EFF), Color(0xFF72F7EA), Gold))))
-                }
-            }
-            Gem("PAUSE", Modifier.width(94.dp), small = true, secondary = true, action = pause)
-        }
-        Label(game.level.objective, Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)
-            .background(Color(0xAD211633), RoundedCornerShape(12.dp)).padding(horizontal = 8.dp, vertical = 6.dp),
-            size = 14)
-        Board(art, game, clock, interpolation, cursor, true, Modifier.fillMaxWidth().weight(1f)
-            .pointerInput(game, interactive) {
-                if (!interactive) return@pointerInput
-                awaitEachGesture {
-                    val first = awaitFirstDown(requireUnconsumed = false)
-                    val view = Viewport.measure(size.width.toFloat(), size.height.toFloat())
-                    val x = view.unprojectX(first.position.x)
-                    val y = view.unprojectY(first.position.y)
-                    if (x !in 0f..960f || y !in 13f..408f) return@awaitEachGesture
-                    cursor.visible = false
-                    cursor.drawing = false
-                    game.drawing.clear()
-                    game.draw(x, y)
-                    first.consume()
+    LaunchedEffect(playing) { if (playing) camera.tracking = true }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxHeight < 405.dp && maxWidth > 510.dp
+        Column(Modifier.fillMaxSize().focusRequester(focused).onKeyEvent { event ->
+            if (!interactive || event.type != KeyEventType.KeyDown) return@onKeyEvent false
+            when (event.key) {
+                Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown -> {
+                    cursor.visible = true
+                    when (event.key) {
+                        Key.DirectionLeft -> cursor.x = (cursor.x - 7).coerceAtLeast(12f)
+                        Key.DirectionRight -> cursor.x = (cursor.x + 7).coerceAtMost(948f)
+                        Key.DirectionUp -> cursor.y = (cursor.y - 7).coerceAtLeast(28f)
+                        else -> cursor.y = (cursor.y + 7).coerceAtMost(395f)
+                    }
+                    camera.tracking = false
+                    camera.keepVisible(cursor.x)
+                    if (cursor.drawing) game.draw(cursor.x, cursor.y)
                     currentUpdate()
-                    try {
-                        do {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == first.id } ?: break
-                            for (sample in change.historical) {
-                                game.draw(view.unprojectX(sample.position.x), view.unprojectY(sample.position.y))
-                            }
-                            game.draw(view.unprojectX(change.position.x), view.unprojectY(change.position.y))
-                            change.consume()
-                            currentUpdate()
-                            if (!change.pressed) {
-                                game.finish()
-                                currentUpdate()
-                                break
-                            }
-                        } while (true)
-                    } finally {
-                        game.drawing.clear()
-                        currentUpdate()
+                }
+                Key.Spacebar -> if (cursor.visible) {
+                    if (event.nativeKeyEvent.repeatCount > 0) return@onKeyEvent true
+                    cursor.drawing = !cursor.drawing
+                    if (cursor.drawing) game.draw(cursor.x, cursor.y) else game.finish()
+                    currentUpdate()
+                } else return@onKeyEvent false
+                Key.G -> if (!playing) go()
+                Key.M -> if (event.nativeKeyEvent.repeatCount == 0) {
+                    camera.overview = !camera.overview
+                    if (!camera.overview && playing) camera.tracking = true
+                }
+                Key.P, Key.Escape -> pause()
+                Key.Z -> undo()
+                Key.R -> restart()
+                else -> return@onKeyEvent false
+            }
+            true
+        }.focusable(enabled = interactive)) {
+            Row(Modifier.fillMaxWidth().padding(start = 13.dp, end = 13.dp, top = 11.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).background(Color(0xCB211633), RoundedCornerShape(15.dp)).padding(10.dp)) {
+                    Label("LEVEL ${game.level.number}  ·  ${game.level.title}", size = 15, color = Gold,
+                        weight = FontWeight.Black, align = TextAlign.Start)
+                    if (compact) Label(game.level.objective, size = 12, align = TextAlign.Start)
+                    Spacer(Modifier.height(3.dp))
+                    Label("INK  ${(ink * 100).toInt()}%", size = 10, color = Cream, weight = FontWeight.Bold,
+                        align = TextAlign.Start)
+                    Spacer(Modifier.height(3.dp))
+                    val shape = RoundedCornerShape(12.dp)
+                    Box(Modifier.fillMaxWidth().height(9.dp).clip(shape).background(Color(0xFF100D22))
+                        .semantics { contentDescription = "Ink remaining, ${(ink * 100).toInt()} percent" }) {
+                        Box(Modifier.fillMaxHeight().fillMaxWidth(inkWidth.coerceIn(0f, 1f))
+                            .background(Brush.horizontalGradient(listOf(Color(0xFFC56EFF), Color(0xFF72F7EA), Gold))))
                     }
                 }
-            })
-        Row(Modifier.widthIn(max = 520.dp).align(Alignment.CenterHorizontally).fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Gem("UNDO", Modifier.weight(1f), small = true, secondary = true, action = undo)
-            Gem(if (playing) "RUNNING" else "GO", Modifier.weight(1.2f), small = true, enabled = !playing, action = go)
-            Gem("RESTART", Modifier.weight(1f), small = true, secondary = true, action = restart)
+                Gem("PAUSE", Modifier.width(94.dp), small = true, secondary = true, action = pause)
+            }
+            if (!compact) Label(game.level.objective, Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)
+                .background(Color(0xAD211633), RoundedCornerShape(12.dp)).padding(horizontal = 8.dp, vertical = 6.dp),
+                size = 14)
+            Board(art, game, clock, interpolation, cursor, true, camera, Modifier.fillMaxWidth().weight(1f)
+                .onSizeChanged { camera.resize(it.width.toFloat(), it.height.toFloat()) }
+                .pointerInput(game, interactive) {
+                    if (!interactive) return@pointerInput
+                    awaitEachGesture {
+                        val first = awaitFirstDown()
+                        val initialSize = size
+                        val view = camera.measure(size.width.toFloat(), size.height.toFloat(), game, interpolation)
+                        val x = view.unprojectX(first.position.x)
+                        val y = view.unprojectY(first.position.y)
+                        if (x !in 0f..960f || y !in 13f..408f) return@awaitEachGesture
+                        camera.frozenFocus = view.unprojectX(size.width / 2f)
+                        cursor.visible = false
+                        cursor.drawing = false
+                        game.drawing.clear()
+                        game.draw(x, y)
+                        first.consume()
+                        currentUpdate()
+                        try {
+                            do {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == first.id } ?: break
+                                if (size != initialSize || change.isConsumed || event.changes.any { it.id != first.id && it.pressed }) break
+                                for (sample in change.historical) {
+                                    game.draw(view.unprojectX(sample.position.x), view.unprojectY(sample.position.y))
+                                }
+                                game.draw(view.unprojectX(change.position.x), view.unprojectY(change.position.y))
+                                change.consume()
+                                currentUpdate()
+                                if (!change.pressed) {
+                                    game.finish()
+                                    currentUpdate()
+                                    break
+                                }
+                            } while (true)
+                        } finally {
+                            camera.frozenFocus = null
+                            game.drawing.clear()
+                            currentUpdate()
+                        }
+                    }
+                })
+            if (!compact) Row(Modifier.widthIn(max = 560.dp).align(Alignment.CenterHorizontally).fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RouteMap(game, camera, clock, interpolation, interactive, Modifier.weight(1f))
+                MapButton(camera, playing, Modifier.width(88.dp))
+            }
+            Row(Modifier.widthIn(max = if (compact) 880.dp else 520.dp)
+                .align(Alignment.CenterHorizontally).fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (compact) {
+                    RouteMap(game, camera, clock, interpolation, interactive, Modifier.weight(2f))
+                    MapButton(camera, playing, Modifier.width(88.dp))
+                }
+                Gem("UNDO", Modifier.weight(1f), small = true, secondary = true, action = undo)
+                Gem(if (playing) "RUNNING" else "GO", Modifier.weight(1.2f), small = true, enabled = !playing, action = go)
+                Gem("RESTART", Modifier.weight(1f), small = true, secondary = true, action = restart)
+            }
         }
+    }
+}
+
+@Composable
+private fun MapButton(camera: BoardCamera, playing: Boolean, modifier: Modifier) {
+    Gem(if (camera.overview) "ZOOM IN" else "MAP", modifier, small = true,
+        secondary = true, action = {
+            camera.overview = !camera.overview
+            if (!camera.overview && playing) camera.tracking = true
+        })
+}
+
+@Composable
+private fun RouteMap(game: Game, camera: BoardCamera, clock: FloatState, interpolation: FloatState,
+                     interactive: Boolean, modifier: Modifier) {
+    val shape = RoundedCornerShape(13.dp)
+    Canvas(modifier.height(45.dp).clip(shape).background(Color(0xDF17112C)).border(1.dp, Color(0xFF9B6A94), shape)
+        .semantics {
+            contentDescription = "Level route map. Drag or use left and right to move the view."
+            progressBarRangeInfo = ProgressBarRangeInfo(camera.focus, 0f..Viewport.WIDTH)
+            if (interactive) setProgress { camera.select(it); true }
+        }
+        .onPreviewKeyEvent {
+            if (!interactive || it.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            val delta = when (it.key) {
+                Key.DirectionLeft -> -80f
+                Key.DirectionRight -> 80f
+                else -> return@onPreviewKeyEvent false
+            }
+            camera.select(camera.focus + delta)
+            true
+        }
+        .focusable(interactive)
+        .pointerInput(game, interactive) {
+            if (!interactive) return@pointerInput
+            awaitEachGesture {
+                val down = awaitFirstDown()
+                camera.select(down.position.x / size.width * Viewport.WIDTH)
+                down.consume()
+                do {
+                    val move = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                    camera.select(move.position.x / size.width * Viewport.WIDTH)
+                    move.consume()
+                } while (move.pressed)
+            }
+        }) {
+        clock.floatValue
+        val ratio = size.width / Viewport.WIDTH
+        val cameraView = camera.measure(camera.width, camera.height, game, interpolation)
+        val left = cameraView.unprojectX(0f).coerceIn(0f, Viewport.WIDTH) * ratio
+        val right = cameraView.unprojectX(camera.width).coerceIn(0f, Viewport.WIDTH) * ratio
+        drawRect(Color(0x59486686), topLeft = Offset(left, 0f), size = androidx.compose.ui.geometry.Size(right - left, size.height))
+        for (ground in game.level.terrain) {
+            val y = (ground.top / Viewport.HEIGHT * .55f + .13f) * size.height
+            drawLine(Color(game.level.world.accent), Offset(ground.left * ratio, y),
+                Offset(ground.right * ratio, y), strokeWidth = 3.dp.toPx())
+        }
+        for (hint in game.level.hints) drawCircle(Gold, 2.dp.toPx(),
+            Offset(hint.x * ratio, size.height * .21f))
+        drawCircle(Cream, 3.5.dp.toPx(), Offset(game.x * ratio, size.height * .77f))
+        drawCircle(Color(0xFFE9A4FF), 3.5.dp.toPx(), Offset(910 * ratio, size.height * .77f))
     }
 }
 
@@ -541,7 +682,7 @@ private fun PopupFrame(title: String, clock: FloatState, finale: Boolean, body: 
     LaunchedEffect(title) { entered = true }
     Box(Modifier.fillMaxSize().background(Color(0xB10A0717))
         .clickable(noRipple, indication = null, onClick = {})
-        .windowInsetsPadding(WindowInsets.displayCutout).padding(15.dp)) {
+        .windowInsetsPadding(WindowInsets.displayCutout).windowInsetsPadding(WindowInsets.waterfall).padding(12.dp)) {
         if (finale) Canvas(Modifier.fillMaxSize()) {
             val t = clock.floatValue
             repeat(65) { i ->
@@ -593,17 +734,24 @@ private fun Gem(label: String, modifier: Modifier = Modifier, small: Boolean = f
     val shape = RoundedCornerShape(if (small) 13.dp else 18.dp)
     val eligible = enabled && LocalControls.current
     val trim = if (focused) listOf(Color.White, Color(0xFFF5E799), Color.White)
-        else listOf(Color(0xFFFFF4AC), Color(0xFFC6863D), Color(0xFF7D3E2C), Color(0xFFFFD17A))
+        else listOf(Color(0xFFFFF5B4), Color(0xFFD8963D), Color(0xFF7A3A22), Color(0xFFB4632C))
     val face = if (!enabled) listOf(Color(0xFF575269), Color(0xFF34314F), Color(0xFF272439))
         else if (secondary) listOf(Color(0xFF936DCD), Color(0xFF5B368C), Color(0xFF382356))
         else listOf(Color(0xFF36BBAB), Color(0xFF168677), Color(0xFF105956))
+    val faceBrush = remember(face) {
+        Brush.verticalGradient(0f to face[0], .46f to face[1], 1f to face[2])
+    }
+    val shine = remember {
+        Brush.verticalGradient(0f to Color(0x56FFFFFF), .40f to Color(0x15FFFFFF),
+            .47f to Color.Transparent, 1f to Color(0x2105041E))
+    }
     Box(modifier.widthIn(max = 315.dp).fillMaxWidth().heightIn(min = if (small) 45.dp else 52.dp)
         .graphicsLayer { scaleX = sink; scaleY = sink }.shadow(7.dp, shape).clip(shape)
         .background(Brush.verticalGradient(trim))
         .clickable(interactionSource = interaction, indication = null, enabled = eligible, role = Role.Button, onClick = action)
         .padding(start = 3.dp, end = 3.dp, top = 2.dp, bottom = if (pressed) 3.dp else 6.dp)) {
         Column(Modifier.align(Alignment.Center).fillMaxWidth().clip(shape)
-            .background(Brush.verticalGradient(face))
+            .background(faceBrush).background(shine)
             .border(1.dp, Color(0xB8FAEAD0), shape).padding(horizontal = 7.dp, vertical = if (small) 9.dp else 11.dp),
             horizontalAlignment = Alignment.CenterHorizontally) {
             Label(label, size = if (small) 12 else 16, color = if (enabled) Cream else Color(0xFFE6DDE8), weight = FontWeight.Black)

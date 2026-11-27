@@ -1,8 +1,12 @@
 <resources>
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#161436</item>
-        <item name="android:windowSplashScreenBackground">#161436</item>
+        <item name="android:windowBackground">@color/splash_night</item>
+        <item name="android:windowSplashScreenBackground">@color/splash_night</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/icon_safe</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>

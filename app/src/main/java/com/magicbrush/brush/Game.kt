@@ -32,6 +32,8 @@ class Game(val level: Level, private val play: (Cue) -> Unit = {}) {
     class Shot(val seed: Hazard) {
         var x = seed.x
         var y = seed.y
+        var previousX = x
+        var previousY = y
         var vx = seed.drift
         var vy = 0f
         var state = 0
@@ -52,6 +54,8 @@ class Game(val level: Level, private val play: (Cue) -> Unit = {}) {
     var previousX = x
         private set
     var previousY = y
+        private set
+    var previousTime = 0f
         private set
     var time = 0f
         private set
@@ -109,11 +113,11 @@ class Game(val level: Level, private val play: (Cue) -> Unit = {}) {
         if (phase != Phase.RUN) return
         previousX = x
         previousY = y
-        val lastTime = time
+        previousTime = time
         time += dt
         fallWeights(dt)
         activateRunes()
-        updateHero(dt, lastTime)
+        updateHero(dt)
         updateShots(dt)
         if (y > 414f) fail("Your explorer fell. Paint a continuous path.")
         if (time > 36f) fail("The portal timed out. Check the path and the switches.")
@@ -167,7 +171,7 @@ class Game(val level: Level, private val play: (Cue) -> Unit = {}) {
         }
     }
 
-    private fun updateHero(dt: Float, lastTime: Float) {
+    private fun updateHero(dt: Float) {
         val ground = level.terrain.firstOrNull { x in it.left..it.right }
         val target = if (ground?.grip == .21f && grounded) 143f else 127f
         speed += (target - speed) * (if (ground?.grip == .21f) 2.8f else 11f) * dt
@@ -175,8 +179,7 @@ class Game(val level: Level, private val play: (Cue) -> Unit = {}) {
         var nextX = x + (speed + breeze * .25f) * dt
         if (ride >= 0) {
             val ferry = ferryX(ride)
-            val drift = ferry - ferryX(ride, lastTime)
-            nextX = maxOf(x, x + drift)
+            nextX = ferry
             val landing = level.terrain.firstOrNull { it.left > level.lifts[ride].x }
             if (landing != null && ferry + 12f >= landing.left) {
                 nextX = landing.left + 1f
@@ -265,6 +268,8 @@ class Game(val level: Level, private val play: (Cue) -> Unit = {}) {
                     continue
                 }
             } else if (!flying) shot.vy += 610f * dt
+            shot.previousX = shot.x
+            shot.previousY = shot.y
             shot.x += shot.vx * dt
             shot.y += shot.vy * dt
             if (shot.y > 419 || shot.x < 9f) {
@@ -274,8 +279,13 @@ class Game(val level: Level, private val play: (Cue) -> Unit = {}) {
             if (shot.state == 3) continue
             val radiusSquared = (shot.radius + 3f) * (shot.radius + 3f)
             var contact: Edge? = null
+            val midX = (shot.x + shot.previousX) * .5f
+            val midY = (shot.y + shot.previousY) * .5f
             for (body in ink) {
-                contact = body.edges.firstOrNull { it.distanceSquared(shot.x, shot.y) < radiusSquared }
+                contact = body.edges.firstOrNull {
+                    it.distanceSquared(shot.x, shot.y) < radiusSquared ||
+                        it.distanceSquared(midX, midY) < radiusSquared
+                }
                 if (contact != null) break
             }
             if (contact != null && (flying || shot.vy > 0f)) {

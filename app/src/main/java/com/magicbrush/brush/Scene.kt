@@ -8,6 +8,8 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.RadialGradient
+import java.util.WeakHashMap
 import android.graphics.Shader
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
@@ -36,19 +38,9 @@ class Art(context: Context) {
             ledge(world)
         }
         for (id in intArrayOf(R.drawable.hero_idle, R.drawable.hero_walk, R.drawable.hero_jump,
-            R.drawable.portal, R.drawable.bee, R.drawable.star, R.drawable.trophy, R.drawable.paintbrush)) image(id)
-    }
-}
-
-data class Viewport(val x: Float, val y: Float, val scale: Float) {
-    fun unprojectX(px: Float) = (px - x) / scale
-    fun unprojectY(py: Float) = (py - y) / scale
-
-    companion object {
-        fun measure(width: Float, height: Float): Viewport {
-            val scale = minOf(width / 960f, height / 438f).coerceAtLeast(.001f)
-            return Viewport((width - scale * 960f) / 2f, (height - scale * 438f) * .52f, scale)
-        }
+            R.drawable.portal, R.drawable.bee, R.drawable.star, R.drawable.trophy, R.drawable.paintbrush,
+            R.drawable.hazard_rock, R.drawable.hazard_icicle, R.drawable.hazard_ember, R.drawable.hazard_orb,
+            R.drawable.rune_plate, R.drawable.spring_flower)) image(id)
     }
 }
 
@@ -62,16 +54,18 @@ fun Background(art: Art, world: World, clock: FloatState, modifier: Modifier = M
 
 @Composable
 fun Board(art: Art, game: Game, clock: FloatState, interpolation: FloatState, cursor: Cursor,
-          showHints: Boolean, modifier: Modifier = Modifier) {
+          showHints: Boolean, camera: BoardCamera, modifier: Modifier = Modifier) {
     val renderer = remember(art) { Scene(art) }
     Canvas(modifier) {
-        val view = Viewport.measure(size.width, size.height)
+        val view = camera.measure(size.width, size.height, game, interpolation)
         drawIntoCanvas {
             val canvas = it.nativeCanvas
             val save = canvas.save()
+            canvas.clipRect(0f, 0f, size.width, size.height)
             canvas.translate(view.x, view.y)
             canvas.scale(view.scale, view.scale)
-            renderer.board(canvas, game, clock.floatValue, interpolation.floatValue, cursor, showHints)
+            renderer.board(canvas, game, clock.floatValue, interpolation.floatValue, cursor, showHints,
+                view.unprojectX(0f), view.unprojectX(size.width))
             canvas.restoreToCount(save)
         }
     }
@@ -81,6 +75,9 @@ class Scene(private val art: Art) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val path = Path()
     private val rect = RectF()
+    private val committedPaths = WeakHashMap<Game.Body, Path>()
+    private val portalHalo = RadialGradient(0f, 0f, 1f, 0xBBCA8BFF.toInt(), 0x00A663EC, Shader.TileMode.CLAMP)
+    private val floorShadow = RadialGradient(0f, 0f, 1f, 0xAA1C0B26.toInt(), 0x001C0B26, Shader.TileMode.CLAMP)
     private var backgroundShade: LinearGradient? = null
     private var shadeHeight = -1f
     private var shadeDim = false
@@ -91,7 +88,7 @@ class Scene(private val art: Art) {
         val ratio = maxOf(w / bitmap.width, h / bitmap.height) * 1.075f
         val width = ratio * bitmap.width
         val height = ratio * bitmap.height
-        val xf = (w - width) * .5f + sin(t * .22f) * w * .024f
+        val xf = (w - width) * .5f + sin(t * .22f) * (width - w) * .28f
         val yf = (h - height) * .44f
         bitmap(c, bitmap, xf, yf, width, height)
         if (shadeHeight != h || shadeDim != dim) {
@@ -116,21 +113,25 @@ class Scene(private val art: Art) {
         }
     }
 
-    fun board(c: AndroidCanvas, game: Game, clock: Float, alpha: Float, cursor: Cursor, showHints: Boolean) {
+    fun board(c: AndroidCanvas, game: Game, clock: Float, alpha: Float, cursor: Cursor, showHints: Boolean, left: Float, right: Float) {
         val level = game.level
         val accent = level.world.accent.toInt()
         val ledge = art.ledge(level.world)
-        liquid(c, game, clock)
+        val sceneTime = game.previousTime + (game.time - game.previousTime) * alpha
+        liquid(c, game, clock, left, right)
         for (g in level.terrain) {
+            if (g.right < left || g.left > right) continue
             // Repeat ledge art at a fixed proportion on long platforms, with overlapping joins.
             val width = g.right - g.left
             val pieces = (width / 213f).toInt() + 1
             val step = width / pieces
             for (i in 0 until pieces) {
                 val tileWidth = step + if (i < pieces - 1) 10f else 0f
+                val tileX = g.left + step * i
+                if (tileX + tileWidth < left || tileX > right) continue
                 val tileHeight = tileWidth * ledge.height / ledge.width
                 val topFraction = if (level.world == World.SKY) .43f else .34f
-                bitmap(c, ledge, g.left + step * i, g.top - tileHeight * topFraction, tileWidth, tileHeight)
+                bitmap(c, ledge, tileX, g.top - tileHeight * topFraction, tileWidth, tileHeight)
             }
             line(c, g.left + 2, g.top + 1, g.right - 2, g.top + 1, 2.1f, accent)
         }
@@ -144,13 +145,17 @@ class Scene(private val art: Art) {
         }
         level.lifts.forEachIndexed { i, lift ->
             line(c, lift.x, lift.y + 12, lift.x + lift.travel, lift.y + 12, 2f, 0x62FFEDC1)
-            val ferry = game.ferryX(i)
+            val ferry = game.ferryX(i, sceneTime)
             bitmap(c, ledge, ferry - 24f, lift.y - 11, 48f, 33f)
             line(c, ferry - 21f, lift.y, ferry + 21f, lift.y, 3.6f, accent)
         }
         for (spring in level.springs) {
-            line(c, spring.x, spring.y, spring.x, spring.y - 16, 4f, 0xFF91EE65.toInt())
-            glow(c, spring.x, spring.y - 20, 10f + sin(clock * 6f) * 2, 0xFFFFAAED.toInt(), 0xFFE45DE4.toInt())
+            if (spring.x !in (left - 44f)..(right + 44f)) continue
+            val flower = art.image(R.drawable.spring_flower)
+            val flowerHeight = 48f + sin(clock * 4f) * 2f
+            val flowerWidth = flowerHeight * flower.width / flower.height
+            halo(c, spring.x, spring.y - 25, 22f, 24f, portalHalo, 127)
+            bitmap(c, flower, spring.x - flowerWidth / 2f, spring.y - flowerHeight, flowerWidth, flowerHeight)
         }
         level.switches.forEachIndexed { i, rune ->
             val open = game.opened[i]
@@ -162,8 +167,10 @@ class Scene(private val art: Art) {
                 for (j in 0..4) star(c, rune.gate, base - j * 14f + sin(clock * 4 + j) * 3f, 4f, hintInk)
             }
             if (rune.weightOnly) {
-                line(c, rune.x - 24, rune.y, rune.x + 24, rune.y, 8f, 0xFF501C89.toInt())
-                line(c, rune.x - 18, rune.y - 2, rune.x + 18, rune.y - 2, 3f, color)
+                val plate = art.image(R.drawable.rune_plate)
+                val plateDepth = 57f * plate.height / plate.width
+                bitmap(c, plate, rune.x - 28.5f, rune.y - plateDepth * .52f, 57f, plateDepth)
+                if (open) star(c, rune.x, rune.y - 8f, 6f, color)
             } else {
                 solid(0xD655247D.toInt())
                 c.drawCircle(rune.x, rune.y, 15f, paint)
@@ -173,6 +180,7 @@ class Scene(private val art: Art) {
 
         val exit = art.image(R.drawable.portal)
         val portalHeight = 100f + sin(clock * 3.4f) * 2.4f
+        halo(c, 910f, level.portalY - 48f, 61f, 68f, portalHalo, (155 + sin(clock * 2.8f) * 30).toInt())
         bitmap(c, exit, 910 - portalHeight * exit.width / exit.height / 2, level.portalY - portalHeight,
             portalHeight * exit.width / exit.height, portalHeight)
         repeat(8) { i ->
@@ -181,23 +189,28 @@ class Scene(private val art: Art) {
             star(c, 911 + dx, level.portalY - dy, 2f + (i % 3), 0xCDECD0FF.toInt())
         }
         for (shot in game.shots) {
-            if (shot.state == 2) continue
+            if (shot.state == 2 || shot.x < left - 45 || shot.x > right + 45) continue
             val height = if (shot.state == 0) sin(clock * 4f + shot.x) * 3f else 0f
-            hazard(c, shot.seed.kind, shot.x, shot.y + height, clock)
+            hazard(c, shot.seed.kind, shot.previousX + (shot.x - shot.previousX) * alpha,
+                shot.previousY + (shot.y - shot.previousY) * alpha + height, clock, shot.state == 3)
         }
         for (body in game.ink) {
             if (body.edges.isEmpty()) continue
-            path.rewind()
-            path.moveTo(body.edges[0].a.x, body.edges[0].a.y)
-            for (edge in body.edges) path.lineTo(edge.b.x, edge.b.y)
-            ink(c, body.shape.weight)
+            val outline = if (body.shape.weight) trace(body, path) else
+                committedPaths.getOrPut(body) { trace(body, Path()) }
+            ink(c, outline, body.shape.weight)
         }
         val active = game.drawing.preview
         if (active.size > 1) {
             path.rewind()
             path.moveTo(active[0].x, active[0].y)
-            for (i in 1 until active.size) path.lineTo(active[i].x, active[i].y)
-            ink(c, false)
+            for (i in 1 until active.lastIndex) {
+                val a = active[i]
+                val b = active[i + 1]
+                path.quadTo(a.x, a.y, (a.x + b.x) * .5f, (a.y + b.y) * .5f)
+            }
+            path.lineTo(active.last().x, active.last().y)
+            ink(c, path, false)
             val tip = active.last()
             repeat(7) { i ->
                 val delta = (clock * 3f + i * .19f) % 1f
@@ -226,12 +239,10 @@ class Scene(private val art: Art) {
             else -> R.drawable.hero_idle
         }
         val hero = art.image(pose)
-        val bob = if (game.grounded) sin(clock * (if (game.phase == Phase.RUN) 15f else 3f)) * 2.5f else 0f
+        val bob = if (game.grounded) kotlin.math.abs(sin(clock * (if (game.phase == Phase.RUN) 12f else 2.7f))) * 2.1f else 0f
         val heroHeight = 71f + bob
         val heroWidth = heroHeight * hero.width / hero.height
-        solid(0x520D0A1F)
-        rect.set(heroX - 16, heroY - 4, heroX + 17, heroY + 4)
-        c.drawOval(rect, paint)
+        if (game.grounded) halo(c, heroX + 2, heroY + 1, 32f, 8f, floorShadow, 215)
         bitmap(c, hero, heroX - heroWidth * .50f, heroY - heroHeight, heroWidth, heroHeight)
         if (cursor.visible) {
             val color = if (cursor.drawing) 0xFFFFDEA0.toInt() else 0xFFEEC9FF.toInt()
@@ -240,7 +251,7 @@ class Scene(private val art: Art) {
         }
     }
 
-    private fun liquid(c: AndroidCanvas, game: Game, seconds: Float) {
+    private fun liquid(c: AndroidCanvas, game: Game, seconds: Float, left: Float, right: Float) {
         val kind = game.level.world
         if (kind != World.LAVA && kind != World.FOREST && kind != World.ICE) return
         val water = if (kind == World.LAVA) 0xCBDF4B18.toInt() else 0x9952CBE7.toInt()
@@ -249,6 +260,7 @@ class Scene(private val art: Art) {
         for (i in 0 until pieces.lastIndex) {
             val a = pieces[i]
             val b = pieces[i + 1]
+            if (b.left < left || a.right > right) continue
             val lower = maxOf(a.top, b.top) + 40
             path.rewind()
             path.moveTo(a.right, lower)
@@ -268,38 +280,47 @@ class Scene(private val art: Art) {
         }
     }
 
-    private fun hazard(c: AndroidCanvas, kind: HazardKind, x: Float, y: Float, t: Float) {
-        when (kind) {
-            HazardKind.BEE -> bitmap(c, art.image(R.drawable.bee), x - 25, y - 21, 46f, 40f + sin(t * 30f) * 4)
-            HazardKind.ICICLE -> {
-                path.rewind()
-                path.moveTo(x - 10, y - 13)
-                path.lineTo(x + 9, y - 17)
-                path.lineTo(x + 1, y + 18)
-                path.close()
-                solid(0xFFACF3FF.toInt())
-                c.drawPath(path, paint)
-                line(c, x - 6, y - 11, x + 1, y + 14, 2.8f, 0xFFF7FCFF.toInt())
-            }
-            HazardKind.EMBER -> glow(c, x, y, 14f, 0xFFFFC564.toInt(), 0xFFE13049.toInt())
-            HazardKind.ORB -> glow(c, x, y, 13f, 0xFFE1C8FF.toInt(), 0xFF8226CE.toInt())
-            HazardKind.ROCK -> {
-                path.rewind()
-                path.moveTo(x - 13, y + 4)
-                path.lineTo(x - 8, y - 11)
-                path.lineTo(x + 6, y - 15)
-                path.lineTo(x + 14, y - 3)
-                path.lineTo(x + 9, y + 11)
-                path.lineTo(x - 4, y + 13)
-                path.close()
-                solid(0xFF604464.toInt())
-                c.drawPath(path, paint)
-                line(c, x - 7, y - 7, x + 5, y - 12, 4f, 0xFFBEA4AE.toInt())
-            }
+    private fun hazard(c: AndroidCanvas, kind: HazardKind, x: Float, y: Float, t: Float, bouncing: Boolean) {
+        val sprite = art.image(when (kind) {
+            HazardKind.BEE -> R.drawable.bee
+            HazardKind.ICICLE -> R.drawable.hazard_icicle
+            HazardKind.EMBER -> R.drawable.hazard_ember
+            HazardKind.ORB -> R.drawable.hazard_orb
+            HazardKind.ROCK -> R.drawable.hazard_rock
+        })
+        val height = when (kind) {
+            HazardKind.BEE -> 34f + sin(t * 28f) * 2f
+            HazardKind.ICICLE -> 41f
+            else -> 31f
         }
+        val width = height * sprite.width / sprite.height
+        if (kind == HazardKind.ORB) halo(c, x, y, 30f, 30f, portalHalo, 142)
+        val save = c.save()
+        if (bouncing) c.rotate(sin(t * 13f) * 43f, x, y)
+        bitmap(c, sprite, x - width / 2f, y - height / 2f, width, height)
+        c.restoreToCount(save)
     }
 
-    private fun ink(c: AndroidCanvas, weighted: Boolean) {
+    private fun trace(body: Game.Body, outline: Path): Path {
+        outline.rewind()
+        outline.moveTo(body.edges[0].a.x, body.edges[0].a.y)
+        for (edge in body.edges) outline.lineTo(edge.b.x, edge.b.y)
+        return outline
+    }
+
+    private fun halo(c: AndroidCanvas, x: Float, y: Float, rx: Float, ry: Float, shader: Shader, opacity: Int) {
+        val save = c.save()
+        c.translate(x, y)
+        c.scale(rx, ry)
+        solid(-1)
+        paint.alpha = opacity
+        paint.shader = shader
+        c.drawCircle(0f, 0f, 1f, paint)
+        paint.shader = null
+        c.restoreToCount(save)
+    }
+
+    private fun ink(c: AndroidCanvas, outline: Path, weighted: Boolean) {
         val hues = if (weighted) weightedInk else trailInk
         paint.strokeCap = Paint.Cap.ROUND
         paint.strokeJoin = Paint.Join.ROUND
@@ -307,18 +328,9 @@ class Scene(private val art: Art) {
             solid(hues[i])
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = widths[i]
-            c.drawPath(path, paint)
+            c.drawPath(outline, paint)
         }
         paint.style = Paint.Style.FILL
-    }
-
-    private fun glow(c: AndroidCanvas, x: Float, y: Float, r: Float, light: Int, shadow: Int) {
-        solid(shadow)
-        c.drawCircle(x, y, r, paint)
-        solid(light)
-        c.drawCircle(x - r * .19f, y - r * .21f, r * .73f, paint)
-        solid(0xCFFFFFFF.toInt())
-        c.drawCircle(x - r * .32f, y - r * .42f, r * .22f, paint)
     }
 
     private fun star(c: AndroidCanvas, x: Float, y: Float, r: Float, color: Int) {
