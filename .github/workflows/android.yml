@@ -1,0 +1,80 @@
+name: Android validation and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: Build and upload signed artifacts
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install API 36 and Android Build Tools
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Lint and exercise the drawing physics
+        run: ./gradlew --no-daemon lintRelease testReleaseUnitTest
+      - name: Validate merged manifest
+        run: python3 tools/audit-manifest.py app/build/intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml
+
+  sign:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.sign)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Build and check both signed packages
+        env:
+          BRUSH_RELEASE_SIGNING: ${{ secrets.BRUSH_RELEASE_SIGNING }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export BRUSH_SIGNING_STORE="$RUNNER_TEMP/magic-brush-signing.p12"
+          trap 'rm -f "$BRUSH_SIGNING_STORE"' EXIT
+          if [[ -z "$BRUSH_RELEASE_SIGNING" ]]; then
+            echo 'Configure the BRUSH_RELEASE_SIGNING GitHub Actions repository secret.'
+            exit 1
+          fi
+          export BRUSH_STORE_PASSWORD="$(jq -er '.storePassword' <<< "$BRUSH_RELEASE_SIGNING")"
+          export BRUSH_KEY_PASSWORD="$(jq -er '.keyPassword' <<< "$BRUSH_RELEASE_SIGNING")"
+          export BRUSH_KEY_ALIAS="$(jq -er '.alias' <<< "$BRUSH_RELEASE_SIGNING")"
+          echo "::add-mask::$BRUSH_STORE_PASSWORD"
+          echo "::add-mask::$BRUSH_KEY_PASSWORD"
+          jq -er '.storeB64' <<< "$BRUSH_RELEASE_SIGNING" | base64 --decode > "$BRUSH_SIGNING_STORE"
+          unset BRUSH_RELEASE_SIGNING
+          ./gradlew --no-daemon assembleRelease bundleRelease
+          mkdir dist
+          cp app/build/outputs/apk/release/app-release.apk dist/Magic-Brush.apk
+          cp app/build/outputs/bundle/release/app-release.aab dist/Magic-Brush.aab
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs dist/Magic-Brush.apk
+          jarsigner -verify dist/Magic-Brush.aab
+          (cd dist && sha256sum Magic-Brush.apk Magic-Brush.aab > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: magic-brush-signed-${{ github.ref_name }}
+          path: dist
+          if-no-files-found: error

@@ -1,0 +1,9 @@
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#161436</item>
+        <item name="android:windowSplashScreenBackground">#161436</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/icon_safe</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

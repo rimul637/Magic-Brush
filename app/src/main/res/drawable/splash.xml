@@ -1,0 +1,5 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@android:color/black" />
+    <item android:width="144dp" android:height="144dp" android:gravity="center"
+        android:drawable="@drawable/magic_icon" />
+</layer-list>
